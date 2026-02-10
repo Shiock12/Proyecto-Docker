@@ -1,0 +1,61 @@
+name: CI - Run app (no compose)
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  run-app:
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        ports:
+          - 3306:3306
+        env:
+          MYSQL_ROOT_PASSWORD: secret
+          MYSQL_DATABASE: todos
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -psecret"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Wait for MySQL
+        run: npx wait-port 127.0.0.1:3306 -t 60000
+
+      - name: Start app (background)
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_USER: root
+          MYSQL_PASSWORD: secret
+          MYSQL_DB: todos
+        run: |
+          npm run dev > app.log 2>&1 &
+          echo $! > app.pid
+          npx wait-port 127.0.0.1:3000 -t 60000
+
+      - name: Smoke test (HTTP)
+        run: |
+          curl -fsS http://127.0.0.1:3000/ | head -c 200
+
+      - name: Show logs if something failed
+        if: failure()
+        run: |
+          echo "=== app.log ==="
+          cat app.log || true
